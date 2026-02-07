@@ -1,8 +1,7 @@
-name: Build dist on merge
+name: Build dist after merge
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches:
       - develop
       - main
@@ -13,18 +12,18 @@ permissions:
 
 jobs:
   build-dist:
-    # Run only when PR is merged AND skip dist branches (avoid loop)
+    # avoid loop when dist branch merges
     if: >
-      github.event.pull_request.merged == true &&
-      !startsWith(github.event.pull_request.head.ref, 'dist/')
+      !startsWith(github.ref_name, 'dist/') &&
+      !contains(github.event.head_commit.message, 'chore(dist):')
 
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout merged code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ secrets.GITHUBTOKEN }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -32,25 +31,23 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
+      - name: Install & Build
+        run: |
+          npm ci
+          npm run build
 
       - name: Create dist branch & commit
         id: dist
         run: |
-          BASE="${{ github.event.pull_request.base.ref }}"
-          SHA="${{ github.event.pull_request.merge_commit_sha }}"
-          SHORT="${SHA::7}"
+          BASE="${{ github.ref_name }}"
+          SHORT="${GITHUB_SHA::7}"
           BR="dist/${BASE}-${SHORT}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "$BR"
-          git add dist/
+          git add -A dist/
 
           if git diff --staged --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
@@ -58,7 +55,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore(dist): rebuild for ${BASE} (${SHORT}) [skip ci]"
+          git commit -m "chore(dist): rebuild for ${BASE} (${SHORT})"
           git push -u origin "$BR"
 
           echo "changed=true" >> $GITHUB_OUTPUT
@@ -68,15 +65,16 @@ jobs:
         if: ${{ steps.dist.outputs.changed == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUBTOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUBTOKEN }}
         run: |
-          BASE="${{ github.event.pull_request.base.ref }}"
+          BASE="${{ github.ref_name }}"
           BR="${{ steps.dist.outputs.branch }}"
 
           gh pr create \
             --base "$BASE" \
             --head "$BR" \
             --title "chore(dist): rebuild" \
-            --body "Auto-generated dist build after PR #${{ github.event.pull_request.number }}" || true
+            --body "Auto-generated dist build for ${BASE}" || true
 
           PR_NUMBER=$(gh pr list --head "$BR" --json number -q '.[0].number')
 
