@@ -1,0 +1,67 @@
+name: Build dist on merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop, main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-dist:
+    if: ${{ github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'dist/') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Commit dist to new branch
+        id: dist
+        run: |
+          BASE="${{ github.event.pull_request.base.ref }}"
+          SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          SHORT="${SHA::7}"
+          BR="dist/${BASE}-${SHORT}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BR"
+          git add dist/
+
+          if git diff --staged --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          git commit -m "chore(dist): rebuild for ${BASE} (${SHORT})"
+          git push -u origin "$BR"
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "branch=$BR" >> $GITHUB_OUTPUT
+
+      - name: PR + Auto-merge
+        if: ${{ steps.dist.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE="${{ github.event.pull_request.base.ref }}"
+          BR="${{ steps.dist.outputs.branch }}"
+
+          gh pr create --base "$BASE" --head "$BR" \
+            --title "chore(dist): rebuild" \
+            --body "Auto dist rebuild after PR #${{ github.event.pull_request.number }}" || true
+
+          PR="$(gh pr list --head "$BR" --json number -q '.[0].number')"
+          gh pr merge "$PR" --auto --merge
