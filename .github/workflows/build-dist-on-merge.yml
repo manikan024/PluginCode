@@ -3,7 +3,9 @@ name: Build dist on merge
 on:
   pull_request:
     types: [closed]
-    branches: [develop, main]
+    branches:
+      - develop
+      - main
 
 permissions:
   contents: write
@@ -11,23 +13,32 @@ permissions:
 
 jobs:
   build-dist:
-    if: ${{ github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'dist/') }}
+    # Run only when PR is merged AND skip dist branches (avoid loop)
+    if: >
+      github.event.pull_request.merged == true &&
+      !startsWith(github.event.pull_request.head.ref, 'dist/')
+
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout merged code
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - run: npm ci
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Commit dist to new branch
+      - name: Build
+        run: npm run build
+
+      - name: Create dist branch & commit
         id: dist
         run: |
           BASE="${{ github.event.pull_request.base.ref }}"
@@ -43,15 +54,17 @@ jobs:
 
           if git diff --staged --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No dist changes"
             exit 0
           fi
 
-          git commit -m "chore(dist): rebuild for ${BASE} (${SHORT})"
+          git commit -m "chore(dist): rebuild for ${BASE} (${SHORT}) [skip ci]"
           git push -u origin "$BR"
+
           echo "changed=true" >> $GITHUB_OUTPUT
           echo "branch=$BR" >> $GITHUB_OUTPUT
 
-      - name: PR + Auto-merge
+      - name: Create PR and merge
         if: ${{ steps.dist.outputs.changed == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUBTOKEN }}
@@ -59,9 +72,12 @@ jobs:
           BASE="${{ github.event.pull_request.base.ref }}"
           BR="${{ steps.dist.outputs.branch }}"
 
-          gh pr create --base "$BASE" --head "$BR" \
+          gh pr create \
+            --base "$BASE" \
+            --head "$BR" \
             --title "chore(dist): rebuild" \
-            --body "Auto dist rebuild after PR #${{ github.event.pull_request.number }}" || true
+            --body "Auto-generated dist build after PR #${{ github.event.pull_request.number }}" || true
 
-          PR="$(gh pr list --head "$BR" --json number -q '.[0].number')"
-          gh pr merge "$PR" --auto --merge
+          PR_NUMBER=$(gh pr list --head "$BR" --json number -q '.[0].number')
+
+          gh pr merge "$PR_NUMBER" --merge
