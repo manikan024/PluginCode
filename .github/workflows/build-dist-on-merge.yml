@@ -54,7 +54,7 @@ jobs:
       - name: PR + Auto-merge
         if: ${{ steps.dist.outputs.changed == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUBTOKEN }}
         run: |
           BASE="${{ github.event.pull_request.base.ref }}"
           BR="${{ steps.dist.outputs.branch }}"
